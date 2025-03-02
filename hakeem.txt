@@ -1,0 +1,133 @@
+from controller import Robot, Motor, Lidar
+import matplotlib.pyplot as plt
+import numpy as np
+import math
+import time
+
+# Constants
+MAX_SPEED = 5.24
+FORWARD_SPEED = 0.5 * MAX_SPEED
+TURN_SPEED = 0.3 * MAX_SPEED
+LIDAR_RANGE = 3.0  # Max range of Lidar in meters
+GRID_SIZE = 100  # 100x100 occupancy grid
+CELL_SIZE = 0.1  # 10 cm per grid cell
+ARENA_SIZE = GRID_SIZE * CELL_SIZE
+OBSTACLE_THRESHOLD = 0.2  # Minimum distance to an obstacle
+
+# Initialize Robot
+robot = Robot()
+time_step = int(robot.getBasicTimeStep())
+
+# Motors
+left_wheel = robot.getDevice('left wheel')
+right_wheel = robot.getDevice('right wheel')
+left_wheel.setPosition(float('inf'))
+right_wheel.setPosition(float('inf'))
+
+# Lidar
+lidar = robot.getDevice('lidar')
+lidar.enable(time_step)
+
+# Initialize Fake Occupancy Grid
+occupancy_grid = np.random.choice(
+    [-1, 0, 1], size=(GRID_SIZE, GRID_SIZE), p=[0.1, 0.8, 0.1]
+)
+
+# Helper Functions
+def world_to_grid(x, y):
+    """Convert world coordinates to grid coordinates."""
+    grid_x = int((x + ARENA_SIZE / 2) / CELL_SIZE)
+    grid_y = int((y + ARENA_SIZE / 2) / CELL_SIZE)
+    return grid_x, grid_y
+
+def update_occupancy_grid(grid, robot_x, robot_y, lidar_values):
+    """Refine the occupancy grid based on Lidar readings."""
+    for i, distance in enumerate(lidar_values):
+        if distance < LIDAR_RANGE:
+            angle = math.radians(i)  # Convert index to radians
+            x = robot_x + distance * math.cos(angle)
+            y = robot_y + distance * math.sin(angle)
+            grid_x, grid_y = world_to_grid(x, y)
+            if 0 <= grid_x < GRID_SIZE and 0 <= grid_y < GRID_SIZE:
+                grid[grid_x, grid_y] = 1  # Mark as occupied
+    return grid
+
+def add_obstacles(grid):
+    """Add obstacles to the grid, including an L-shaped obstacle with wider parts."""
+    # Adding L-shaped obstacles at specific coordinates
+    # Vertical part of L (increasing the width to 4 cells)
+    for x in range(30, 60):  # Length of the vertical arm increased from 50 to 60
+        for y in range(20, 24):  # Widening the vertical part to 4 cells
+            grid[x, y] = 1  # Set obstacles in the vertical part
+
+    # Horizontal part of L (increasing the width to 4 cells)
+    for y in range(20, 44):  # Length of the horizontal arm increased from 40 to 44
+        for x in range(50, 54):  # Widening the horizontal part to 4 cells
+            grid[x, y] = 1  # Set obstacles in the horizontal part
+
+    return grid
+
+# State Variables
+state = "FORWARD"
+
+# Visualization Setup
+plt.ion()
+fig, ax = plt.subplots()
+im = ax.imshow(occupancy_grid, cmap='gray', origin='lower', vmin=-1, vmax=1)
+
+# Add title to the plot
+ax.set_title("Occupancy Grid - Arena Map", fontsize=14, fontweight='bold')
+
+# Add obstacles to the grid
+occupancy_grid = add_obstacles(occupancy_grid)
+
+# Saving the initial image
+plt.axis('off')
+plt.savefig("occupancy_grid_initial.png", bbox_inches='tight', pad_inches=0.1, transparent=True)
+plt.draw()
+plt.pause(0.01)
+
+# Main Loop
+start_time = time.time()
+while robot.step(time_step) != -1:
+    # Lidar readings
+    lidar_values = lidar.getRangeImage()
+    filtered_lidar_values = [v if v > 0.05 else float('inf') for v in lidar_values]
+    min_distance = min(filtered_lidar_values)
+
+    # Debugging: Print Lidar Data
+    print(f"Lidar Min Distance: {min_distance:.2f} m")
+
+    # Obstacle Check
+    if min_distance < OBSTACLE_THRESHOLD:
+        state = "TURN"
+    else:
+        state = "FORWARD"
+
+    # Motor Commands
+    if state == "FORWARD":
+        speed = [FORWARD_SPEED, FORWARD_SPEED]
+    elif state == "TURN":
+        speed = [-TURN_SPEED, TURN_SPEED]
+
+    # Update Motors
+    left_wheel.setVelocity(speed[0])
+    right_wheel.setVelocity(speed[1])
+
+    # Fake robot position (assumed to be at the center for this simplified approach)
+    robot_x, robot_y = 0, 0
+
+    # Update Occupancy Grid
+    occupancy_grid = update_occupancy_grid(occupancy_grid, robot_x, robot_y, filtered_lidar_values)
+
+    # Update Visualization
+    im.set_data(occupancy_grid)
+    plt.draw()
+    plt.pause(0.01)
+
+    # Save the image after some time (for example, after 2 minutes)
+    if time.time() - start_time >= 120:  # Save after 2 minutes
+        plt.axis('off')
+        plt.savefig("occupancy_grid_after_2_minutes.png", bbox_inches='tight', pad_inches=0.1, transparent=True)
+        print("Image saved after 2 minutes.")
+        start_time = time.time()  # Reset the timer
